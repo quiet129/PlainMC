@@ -3819,6 +3819,10 @@ class AboutPage(QWidget):
         box.addWidget(QLabel("· 自动处理依赖库、原生库与资源文件"))
         box.addWidget(QLabel("· 离线 / 正版(微软) 双账号，Forge 一键安装"))
         box.addWidget(QLabel("· 启动前自动检测并匹配/下载所需 Java 版本"))
+        box.addWidget(QLabel("· 种子地图：网页地图与离线 cubiomes 双模式，含种子搜索"))
+        box.addWidget(QLabel("· 配方生成器：使用游戏真实材质图标"))
+        box.addWidget(QLabel("· 像素级皮肤编辑器，可一键同步进游戏"))
+        box.addWidget(QLabel("· MOD / 整合包 / 数据包 / 资源包 / 光影包 浏览下载"))
         root.addWidget(card)
         root.addStretch(1)
 
