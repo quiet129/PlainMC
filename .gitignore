@@ -1,0 +1,71 @@
+# ===== 用户数据 / 隐私（绝对不要提交）=====
+.plainmc_config.json
+*.log
+_startup_log.txt
+
+# ===== 游戏数据（Mojang 版权 / 体积巨大）=====
+game_data/
+1.15/
+*.jar
+*.json.gz
+libraries/
+assets/
+versions/
+resourcepacks/
+mods/
+logs/
+crash-reports/
+saves/
+screenshots/
+options.txt
+servers.dat
+usercache.json
+*.mca
+terracotta/
+of.jar
+_t/
+
+# ===== Mojang 材质资源（版权保护，运行时由 tools/_build_texture_map.py 从本地 jar 抽取）=====
+textures/
+
+# ===== 构建产物 =====
+build/
+dist/
+*.spec.bak
+*.manifest
+
+# ===== 运行时缓存（Modrinth 搜索结果与图标缓存）=====
+cache/
+
+# ===== 个人素材（自定义背景图等）=====
+personalization/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 系统 =====
+Thumbs.db
+.DS_Store
+desktop.ini
+$RECYCLE.BIN/
+
+# ===== 备份 / 临时 =====
+_pre_merge_backup/
+*.bak
+*.tmp
+*.log.1

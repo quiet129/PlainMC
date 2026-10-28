@@ -1,0 +1,15 @@
+# ===== 必需 =====
+PyQt6>=6.4
+
+# ===== 可选：缺失时启动器自动降级，不影响启动与主要功能 =====
+# 网页地图（内嵌 Minecraft Search）：缺失时自动降级为离线 cubiomes 地图
+PyQt6-WebEngine>=6.4
+
+# cubiomes 离线地图引擎 + numpy（cubiomespi 依赖 numpy）：
+# 纯 Python wheel，需要 Python >= 3.11。
+# 国内镜像常缺此包，安装失败请用官方源：
+#   pip install cubiomespi numpy -i https://pypi.org/simple
+cubiomespi>=1.0
+numpy>=1.24
+
+# 说明：网络请求全部使用标准库 urllib，无需 requests。
