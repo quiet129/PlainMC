@@ -170,7 +170,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
     QApplication, QLineEdit, QComboBox, QListWidget, QListWidgetItem,
     QFrame, QSpinBox, QTextEdit, QFileDialog, QMessageBox, QSizePolicy,
-    QButtonGroup, QGridLayout, QSlider,
+    QButtonGroup, QGridLayout, QSlider, QCheckBox,
     QScrollArea, QLayout, QProgressBar, QDialog, QColorDialog, QMenu,
 )
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QPainterPath,
@@ -192,7 +192,7 @@ from PyQt6.QtCore import QUrl
 # 常量
 # ==========================================================================
 APP_NAME = "PlainMC"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 USER_AGENT = "PlainMC/1.0 (+https://github.com/plainmc)"
 # 我们不支持任何可选特性（演示模式 / 自定义分辨率 / quickPlay 等）
@@ -3133,6 +3133,14 @@ class LaunchPage(QWidget):
         folder_btn.clicked.connect(self._open_folder)
         lscroll.addWidget(folder_btn)
 
+        # 一键释放内存（清理残留 java 进程 + 回收启动器缓存 + 归还工作集）
+        self.mem_opt_btn = make_ghost("🧹 释放内存")
+        self.mem_opt_btn.setToolTip(
+            "清理游戏残留的 Java 进程、回收启动器图片缓存，"
+            "并把内存归还给系统")
+        self.mem_opt_btn.clicked.connect(self._on_optimize_memory)
+        lscroll.addWidget(self.mem_opt_btn)
+
         root.addWidget(left)
 
         # ===== 右侧背景 =====
@@ -3399,6 +3407,60 @@ class LaunchPage(QWidget):
         self.spinner.stop()
         QTimer.singleShot(1600, self._hide_launch_overlay)
         QTimer.singleShot(1600, lambda: self.launch_btn.setEnabled(True))
+        # 游戏退出后自动做一次内存优化：清掉可能残留的 java 进程，
+        # 并把启动器占用的内存还给系统（可在设置页关闭）
+        if self.main.config.get("mem_opt_on_exit", True):
+            QTimer.singleShot(800, self._auto_optimize_memory)
+
+    def _auto_optimize_memory(self):
+        """游戏退出后的自动内存优化（静默执行，不打扰用户）。"""
+        try:
+            res = optimize_memory(app=QApplication.instance(), main=self.main)
+            freed = res.get("freed_mb", 0)
+            killed = res.get("killed", 0)
+            if killed or freed >= 1:
+                bits = []
+                if killed:
+                    bits.append(f"清理 {killed} 个残留进程")
+                if freed >= 1:
+                    bits.append(f"释放 {freed:.0f} MB")
+                self._set_launch_status("游戏已退出 · " + "，".join(bits))
+        except Exception:
+            pass
+
+    def _on_optimize_memory(self):
+        """「释放内存」按钮：手动执行一次完整内存优化。"""
+        btn = getattr(self, "mem_opt_btn", None)
+        if btn is not None:
+            btn.setEnabled(False)
+            btn.setText("正在释放…")
+        try:
+            QApplication.processEvents()
+            res = optimize_memory(app=QApplication.instance(), main=self.main)
+            ws, _ = process_memory_mb()
+            killed = res.get("killed", 0)
+            freed = res.get("freed_mb", 0)
+            trimmed = res.get("trimmed", False)
+
+            lines = [f"当前启动器占用：{ws:.1f} MB"]
+            if killed:
+                lines.append(f"已清理残留 Java 进程：{killed} 个")
+            else:
+                lines.append("没有发现残留的 Java 进程")
+            if freed >= 0.5:
+                lines.append(f"本次释放：约 {freed:.0f} MB")
+            if trimmed:
+                lines.append("已把内存归还给系统（任务管理器数字会真实下降）")
+            else:
+                lines.append("当前系统不支持工作集回收（非 Windows）")
+
+            QMessageBox.information(self, "内存优化完成", "\n".join(lines))
+        except Exception as e:
+            QMessageBox.warning(self, "内存优化", f"执行时出错：\n{e}")
+        finally:
+            if btn is not None:
+                btn.setEnabled(True)
+                btn.setText("🧹 释放内存")
 
     def _open_folder(self):
         path = self.main.core.game_root
@@ -3748,11 +3810,59 @@ class SettingsPage(QWidget):
         form.addLayout(self._field("默认分配内存", self.mem))
 
         root.addWidget(card)
+
+        # ============ 内存优化 ============
+        opt_card = make_card()
+        opt_form = QVBoxLayout(opt_card)
+        opt_form.setContentsMargins(18, 16, 18, 16)
+        opt_form.setSpacing(12)
+
+        opt_title = QLabel("内存优化")
+        opt_title.setObjectName("SubTitle")
+        opt_form.addWidget(opt_title)
+
+        opt_desc = QLabel(
+            "清理游戏退出后残留的 Java 进程（常驻 1~2GB 物理内存），"
+            "回收启动器自身的图标与贴图缓存，并把内存归还给系统 —— "
+            "任务管理器里启动器那一行的数字会真实下降。")
+        opt_desc.setObjectName("HintText")
+        opt_desc.setWordWrap(True)
+        opt_form.addWidget(opt_desc)
+
+        # 自动清理开关
+        self.chk_mem_on_exit = QCheckBox("游戏退出后自动执行内存优化")
+        self.chk_mem_on_exit.setChecked(bool(
+            self.main.config.get("mem_opt_on_exit", True)))
+        self.chk_mem_on_exit.setMinimumHeight(32)
+        opt_form.addWidget(self.chk_mem_on_exit)
+
+        # 当前占用显示
+        self.mem_usage_label = QLabel()
+        self.mem_usage_label.setObjectName("HintText")
+        opt_form.addWidget(self.mem_usage_label)
+
+        # 立即优化按钮
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(10)
+        btn_now = make_primary("立即释放内存")
+        btn_now.clicked.connect(self._on_optimize_now)
+        opt_row.addWidget(btn_now)
+
+        btn_refresh = make_ghost("刷新占用")
+        btn_refresh.clicked.connect(self._refresh_mem_usage)
+        opt_row.addWidget(btn_refresh)
+        opt_row.addStretch(1)
+        opt_form.addLayout(opt_row)
+
+        root.addWidget(opt_card)
         root.addStretch(1)
 
         save = make_primary("保存设置")
         save.clicked.connect(self._on_save)
         root.addWidget(save)
+
+        # 初次进入就显示当前占用
+        self._refresh_mem_usage()
 
     def _field(self, label, widget):
         box = QVBoxLayout()
@@ -3788,6 +3898,7 @@ class SettingsPage(QWidget):
 
     def _on_save(self):
         self.main.config["memory"] = self.mem.value()
+        self.main.config["mem_opt_on_exit"] = self.chk_mem_on_exit.isChecked()
         new_dir = self.gdir.text()
         self.main.save_config()
         if new_dir != self.main.core.game_root:
@@ -3795,6 +3906,45 @@ class SettingsPage(QWidget):
             if hasattr(self.main, "launch_page"):
                 self.main.launch_page.refresh_installed()
         QMessageBox.information(self, "已保存", "设置已保存。")
+
+    # ---------------------------------------------------- 内存优化
+    def _refresh_mem_usage(self):
+        """刷新启动器当前内存占用显示。"""
+        ws, pv = process_memory_mb()
+        if ws > 0:
+            self.mem_usage_label.setText(
+                f"当前占用：工作集 {ws:.1f} MB ｜ 私有提交 {pv:.1f} MB")
+        else:
+            self.mem_usage_label.setText("当前系统无法读取进程内存占用")
+        return ws
+
+    def _on_optimize_now(self):
+        """设置页的「立即释放内存」。"""
+        try:
+            QApplication.processEvents()
+            res = optimize_memory(app=QApplication.instance(), main=self.main)
+            self._refresh_mem_usage()
+            killed = res.get("killed", 0)
+            freed = res.get("freed_mb", 0)
+            lines = []
+            if killed:
+                lines.append(f"已清理残留 Java 进程：{killed} 个")
+            else:
+                lines.append("没有发现残留的 Java 进程")
+            if freed >= 0.5:
+                lines.append(f"本次释放：约 {freed:.0f} MB")
+            if res.get("trimmed"):
+                lines.append("已把内存归还给系统")
+            QMessageBox.information(
+                self, "内存优化完成",
+                "\n".join(lines) + f"\n\n当前占用：{res.get('after_mb', 0):.1f} MB")
+        except Exception as e:
+            QMessageBox.warning(self, "内存优化", f"执行时出错：\n{e}")
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # 每次进入设置页刷新一次占用数字
+        self._refresh_mem_usage()
 
 
 class AboutPage(QWidget):
@@ -9998,6 +10148,324 @@ class SeedMapPage(QWidget):
             self.canvas.regenerate(immediate=True)
 
 
+# -*- coding: utf-8 -*-
+"""内存优化模块（插入到 PlainMC.py 中）。
+
+目标：
+  1) 游戏退出后清掉残留的 java/javaw 进程（它们常驻 1~2GB 物理内存）
+  2) 回收启动器自己持有的图标 / 贴图 / 背景缓存
+  3) 用 EmptyWorkingSet 把工作集页归还给系统 —— 让「任务管理器」里
+     启动器那一行数字真实下降，而不是只在内部记账
+
+注意：HeapCompact 在 x64 下调用约定不对会直接访问违例，实测已排除，勿用。
+"""
+
+_IS_WINDOWS = (os.name == "nt")
+
+if _IS_WINDOWS:
+    try:
+        import ctypes
+        import ctypes.wintypes as _wt
+
+        _SIZE_T = ctypes.c_size_t
+
+        class _PMC_EX(ctypes.Structure):
+            """PROCESS_MEMORY_COUNTERS_EX —— x64 下必须含 PrivateUsage 才不错位。"""
+            _fields_ = [
+                ("cb", _wt.DWORD),
+                ("PageFaultCount", _wt.DWORD),
+                ("PeakWorkingSetSize", _SIZE_T),
+                ("WorkingSetSize", _SIZE_T),
+                ("QuotaPeakPagedPoolUsage", _SIZE_T),
+                ("QuotaPagedPoolUsage", _SIZE_T),
+                ("QuotaPeakNonPagedPoolUsage", _SIZE_T),
+                ("QuotaNonPagedPoolUsage", _SIZE_T),
+                ("PagefileUsage", _SIZE_T),
+                ("PeakPagefileUsage", _SIZE_T),
+                ("PrivateUsage", _SIZE_T),
+            ]
+
+        _k32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        _psapi = ctypes.WinDLL("psapi.dll", use_last_error=True)
+        _k32.GetCurrentProcess.restype = _wt.HANDLE
+        _k32.GetCurrentProcess.argtypes = []
+        _psapi.GetProcessMemoryInfo.argtypes = [
+            _wt.HANDLE, ctypes.POINTER(_PMC_EX), _wt.DWORD]
+        _psapi.GetProcessMemoryInfo.restype = _wt.BOOL
+        _psapi.EmptyWorkingSet.argtypes = [_wt.HANDLE]
+        _psapi.EmptyWorkingSet.restype = _wt.BOOL
+    except Exception:
+        _k32 = None
+        _psapi = None
+else:
+    _k32 = None
+    _psapi = None
+
+
+def process_memory_mb():
+    """返回当前进程的 (工作集 MB, 私有提交 MB)；非 Windows 或失败返回 (0, 0)。"""
+    if not _IS_WINDOWS or _psapi is None:
+        return (0.0, 0.0)
+    try:
+        c = _PMC_EX()
+        c.cb = ctypes.sizeof(_PMC_EX)
+        h = _k32.GetCurrentProcess()
+        if not _psapi.GetProcessMemoryInfo(h, ctypes.byref(c), c.cb):
+            return (0.0, 0.0)
+        return (c.WorkingSetSize / 1048576.0, c.PrivateUsage / 1048576.0)
+    except Exception:
+        return (0.0, 0.0)
+
+
+def trim_working_set():
+    """把当前进程的工作集页归还给操作系统。
+
+    返回 True 表示调用成功。这一步只改变「物理驻留」状态，不影响任何数据，
+    之后访问页面时系统会重新调入 —— 对用户完全无感，但任务管理器里的
+    内存数字会真实下降。
+    """
+    if not _IS_WINDOWS or _psapi is None:
+        return False
+    try:
+        h = _k32.GetCurrentProcess()
+        return bool(_psapi.EmptyWorkingSet(h))
+    except Exception:
+        return False
+
+
+def _run_text(cmd, timeout=20):
+    """执行命令并以文本返回输出。
+
+    Windows 的 tasklist / wmic 输出是**本地代码页（GBK）**，用默认 utf-8
+    解码会抛 UnicodeDecodeError，因此这里逐个编码尝试并最终 replace 兜底。
+    """
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                             creationflags=_NO_WINDOW)
+        raw = res.stdout or b""
+        for enc in ("utf-8", "gbk", "mbcs"):
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _parse_tasklist_csv(text):
+    """解析 tasklist /FO CSV /NH 的输出，返回 [(pid, name, ws_mb)]。"""
+    import csv
+    import io
+    rows = []
+    try:
+        for row in csv.reader(io.StringIO(text or "")):
+            if len(row) < 5:
+                continue
+            name = row[0]
+            try:
+                pid = int(row[1])
+            except ValueError:
+                continue
+            mem_raw = (row[4] or "").replace(",", "").replace("K", "").strip()
+            try:
+                ws_mb = int(mem_raw) / 1024.0
+            except ValueError:
+                ws_mb = 0.0
+            rows.append((pid, name, ws_mb))
+    except Exception:
+        pass
+    return rows
+
+
+def _iter_java_processes():
+    """列出除本进程外的 java / javaw 进程 (pid, 名称, 工作集 MB)。"""
+    if not _IS_WINDOWS:
+        return []
+    out = []
+    try:
+        rows = _parse_tasklist_csv(_run_text(
+            ["tasklist", "/FI", "IMAGENAME eq java.exe", "/FO", "CSV", "/NH"]))
+        rows += _parse_tasklist_csv(_run_text(
+            ["tasklist", "/FI", "IMAGENAME eq javaw.exe", "/FO", "CSV", "/NH"]))
+        for pid, name, ws_mb in rows:
+            if pid == os.getpid():
+                continue
+            out.append((pid, name, ws_mb))
+    except Exception:
+        pass
+    return out
+
+
+def _get_process_commandline(pid):
+    """取指定进程的命令行。
+
+    Windows 11 起 **wmic 已被移除**，实测本机就没有 wmic，所以优先走
+    PowerShell 的 CIM（Win32_Process）查询；CIM 不可用时再退回 wmic。
+    两条路都失败则返回空字符串（此时按「不是游戏进程」处理，宁可漏杀
+    也不误杀）。
+    """
+    # --- 方式 1：PowerShell + CIM（Win32_Process）---
+    ps = (
+        "$p = Get-CimInstance Win32_Process -Filter \"ProcessId=%d\" "
+        "-ErrorAction SilentlyContinue; "
+        "if ($p) { Write-Output $p.CommandLine }" % pid
+    )
+    text = _run_text(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        timeout=25)
+    if text.strip():
+        return text.strip()
+
+    # --- 方式 2：wmic（老系统兜底）---
+    text = _run_text(
+        ["wmic", "process", "where", "ProcessId=%d" % pid,
+         "get", "CommandLine", "/value"], timeout=20)
+    if text.strip():
+        # wmic /value 格式： "CommandLine=xxx"
+        for line in text.splitlines():
+            if "=" in line:
+                key, _, val = line.partition("=")
+                if key.strip().lower() == "commandline":
+                    return val.strip()
+        return text.strip()
+    return ""
+
+
+def _is_own_game_process(pid):
+    """判断该 java 进程是否由游戏目录启动。
+
+    读取命令行 —— 比 tasklist 多一步，但能避免误杀用户自己用别的
+    启动器 / IDE 开出来的 Java 程序。
+    """
+    text = _get_process_commandline(pid)
+    if not text.strip():
+        return False
+    low = text.lower()
+    markers = (".minecraft", "/versions/", "\\versions\\",
+               "net.minecraft", "minecraft.launcher")
+    return any(m in low for m in markers)
+
+
+def kill_leftover_java(protect_pids=None):
+    """结束残留的 java / javaw 进程，回收它们占用的物理内存。
+
+    保护机制：
+      · protect_pids 里的进程绝不碰（正在运行的游戏就在里面）
+      · 只清理「游戏目录下启动」的进程，避免误杀用户自己开的 Java 程序
+    返回 (杀掉的进程数, 释放的 MB 估算)。
+    """
+    protect = set(int(p) for p in (protect_pids or []))
+    killed, freed = 0, 0.0
+    if not _IS_WINDOWS:
+        return (0, 0.0)
+    try:
+        for pid, name, ws_mb in _iter_java_processes():
+            if pid in protect:
+                continue
+            if not _is_own_game_process(pid):
+                continue
+            try:
+                subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                               capture_output=True, timeout=20,
+                               creationflags=_NO_WINDOW)
+                killed += 1
+                freed += ws_mb
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return (killed, freed)
+
+
+def clear_launcher_caches():
+    """回收启动器自己持有的图片缓存，返回释放的字节数（估算）。"""
+    freed = 0
+    global _ICON_CACHE
+    try:
+        for data in list(_ICON_CACHE.values()):
+            freed += len(data) if data else 0
+        _ICON_CACHE = {}
+    except Exception:
+        pass
+    try:
+        pix = globals().get("_pix_cache")
+        if isinstance(pix, dict):
+            for v in list(pix.values()):
+                try:
+                    freed += v.sizeInBytes() if hasattr(v, "sizeInBytes") else 0
+                except Exception:
+                    pass
+            pix.clear()
+    except Exception:
+        pass
+    try:
+        # PyQt6 的 QPixmapCache 只有静态方法（无 cache() 实例入口）
+        from PyQt6.QtGui import QPixmapCache
+        try:
+            freed += QPixmapCache.cacheLimit() * 1024   # 上限（KB）
+        except Exception:
+            pass
+        QPixmapCache.clear()
+    except Exception:
+        pass
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    return freed
+
+
+def optimize_memory(app=None, main=None, kill_java=True,
+                    clear_caches=True, trim=True):
+    """一键内存优化。
+
+    返回 dict：
+      freed_mb   估算释放的物理内存（MB）
+      killed     结束的残留 java 进程数
+      trimmed    是否成功归还工作集
+      before_mb  优化前工作集
+      after_mb   优化后工作集
+    """
+    before_ws, _ = process_memory_mb()
+    killed, freed_mb = 0, 0.0
+
+    if kill_java:
+        # 正在运行的游戏进程要保护住
+        protect = []
+        proc = getattr(getattr(main, "launch_page", None), "_proc", None)
+        if proc is not None:
+            try:
+                if proc.state() == QProcess.ProcessState.Running:
+                    protect.append(int(proc.processId()))
+            except Exception:
+                pass
+        killed, freed_mb = kill_leftover_java(protect)
+
+    if clear_caches:
+        clear_launcher_caches()
+
+    # 刷新界面，让刚清掉的缓存不被立刻重建
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+
+    trimmed = trim_working_set() if trim else False
+
+    after_ws, _ = process_memory_mb()
+    delta = max(0.0, before_ws - after_ws)
+    return {
+        "freed_mb": round(max(delta, freed_mb), 1),
+        "killed": killed,
+        "trimmed": trimmed,
+        "before_mb": round(before_ws, 1),
+        "after_mb": round(after_ws, 1),
+    }
+
+
 class MainWindow(QWidget):
 
     def __init__(self):
@@ -10089,6 +10557,7 @@ class MainWindow(QWidget):
             "username": "Steve",
             "java_path": "",
             "memory": 2048,
+            "mem_opt_on_exit": True,   # 游戏退出后自动内存优化
             "game_dir": "",
             "mirror": DEFAULT_MIRROR,
             # ---- 个性化 ----

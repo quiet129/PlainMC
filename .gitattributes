@@ -1,0 +1,18 @@
+# 换行符策略：**不做任何自动转换**，文件按原样存储。
+#
+# 背景：本仓库自 v1.0.0 起所有源码都是 CRLF（Windows 优先项目）。
+# 若启用 text/eol 属性，git 会把 CRLF 归一化成 LF 入库，导致
+# 「整文件被标记为已修改」的噪音 diff（实测 13869 行全变）。
+# 因此这里显式关闭归一化，让仓库与工作区始终逐字节一致。
+* -text
+
+*.jpg   binary
+*.png   binary
+*.ico   binary
+*.exe   binary
+*.dll   binary
+*.pyd   binary
+*.zip   binary
+*.jar   binary
+*.dat   binary
+*.img   binary

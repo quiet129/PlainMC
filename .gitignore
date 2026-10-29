@@ -69,3 +69,7 @@ _pre_merge_backup/
 *.bak
 *.tmp
 *.log.1
+
+# ===== 本地临时文件 =====
+_cm*.txt
+_cm*.md
